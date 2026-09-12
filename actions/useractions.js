@@ -5,68 +5,85 @@ import Payment from "@/models/Payment"
 import connectDb from "@/db/connectDb"
 import User from "@/models/User"
 
-
 export const initiate = async (amount, to_username, paymentform) => {
-    await connectDb()
-    // fetch the secret of the user who is getting the payment 
-    let user = await User.findOne({username: to_username})
-    const secret = user.razorpaysecret
+    try {
+        await connectDb()
+        
+        const user = await User.findOne({ username: to_username })
+        if (!user || !user.razorpayid || !user.razorpaysecret) {
+            return { error: "Creator payment details are incomplete or not found." }
+        }
 
-    var instance = new Razorpay({ key_id: user.razorpayid, key_secret: secret })
+        const instance = new Razorpay({ key_id: user.razorpayid, key_secret: user.razorpaysecret })
 
+        const options = {
+            amount: Number.parseInt(amount),
+            currency: "INR",
+        }
 
+        const order = await instance.orders.create(options)
 
-    let options = {
-        amount: Number.parseInt(amount),
-        currency: "INR",
+        await Payment.create({ 
+            oid: order.id, 
+            amount: amount / 100, 
+            to_user: to_username, 
+            name: paymentform.name, 
+            message: paymentform.message 
+        })
+
+        // Serialize the Razorpay object to prevent Next.js Server Action errors
+        return JSON.parse(JSON.stringify(order))
+    } catch (error) {
+        console.error("[Payment Initiation Error]:", error)
+        return { error: "Failed to initiate payment. Please try again later." }
     }
-
-    let x = await instance.orders.create(options)
-
-    // create a payment object which shows a pending payment in the database
-    await Payment.create({ oid: x.id, amount: amount/100, to_user: to_username, name: paymentform.name, message: paymentform.message })
-
-    return x
-
 }
 
-
 export const fetchuser = async (username) => {
-    await connectDb()
-    let u = await User.findOne({ username: username })
-    let user = u.toObject({ flattenObjectIds: true })
-    return user
+    try {
+        await connectDb()
+        const u = await User.findOne({ username: username })
+        if (!u) return null
+        return u.toObject({ flattenObjectIds: true })
+    } catch (error) {
+        console.error("[Fetch User Error]:", error)
+        return null
+    }
 }
 
 export const fetchpayments = async (username) => {
-    await connectDb()
-    // find all payments sorted by decreasing order of amount and flatten object ids
-    let p = await Payment.find({ to_user: username, done:true }).sort({ amount: -1 }).limit(10).lean()
-    return p
+    try {
+        await connectDb()
+        const payments = await Payment.find({ to_user: username, done: true })
+            .sort({ amount: -1 })
+            .limit(10)
+            .lean()
+        return payments
+    } catch (error) {
+        console.error("[Fetch Payments Error]:", error)
+        return []
+    }
 }
 
 export const updateProfile = async (data, oldusername) => {
-    await connectDb()
-    let ndata = Object.fromEntries(data)
+    try {
+        await connectDb()
+        const ndata = Object.fromEntries(data)
 
-    // If the username is being updated, check if username is available
-    if (oldusername !== ndata.username) {
-        let u = await User.findOne({ username: ndata.username })
-        if (u) {
-            return { error: "Username already exists" }
-        }   
-        await User.updateOne({email: ndata.email}, ndata)
-        // Now update all the usernames in the Payments table 
-        await Payment.updateMany({to_user: oldusername}, {to_user: ndata.username})
+        if (oldusername !== ndata.username) {
+            const existingUser = await User.findOne({ username: ndata.username })
+            if (existingUser) {
+                return { error: "Username already exists" }
+            }
+            await User.updateOne({ email: ndata.email }, ndata)
+            await Payment.updateMany({ to_user: oldusername }, { to_user: ndata.username })
+        } else {
+            await User.updateOne({ email: ndata.email }, ndata)
+        }
         
+        return { success: true }
+    } catch (error) {
+        console.error("[Update Profile Error]:", error)
+        return { error: "Failed to update profile settings." }
     }
-    else{
-
-        
-        await User.updateOne({email: ndata.email}, ndata)
-    }
-
-
 }
-
-
